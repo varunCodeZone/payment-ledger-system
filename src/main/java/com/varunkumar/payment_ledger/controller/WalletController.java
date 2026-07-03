@@ -10,12 +10,12 @@ import com.varunkumar.payment_ledger.repository.WalletRepository;
 import com.varunkumar.payment_ledger.repository.LedgerEntryRepository;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -41,10 +41,37 @@ public class WalletController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    // 2. History
     @GetMapping("/history")
-    public ResponseEntity<List<LedgerEntry>> getTransactionHistory() {
-        return ResponseEntity.ok(ledgerEntryRepository.findAll());
+    public ResponseEntity<?> getTransactionHistory(Authentication authentication) {
+        String username = authentication.getName();
+
+        return userRepository.findByUsername(username)
+                .flatMap(user -> walletRepository.findByUser_Id(user.getId()))
+                .map(wallet -> {
+                    List<LedgerEntry> entries = ledgerEntryRepository.findByWalletId(wallet.getId());
+
+                    List<Map<String, Object>> result = entries.stream().map(entry -> {
+                        Map<String, Object> map = new java.util.HashMap<>();
+                        map.put("type", entry.getType());
+                        map.put("amount", entry.getAmount());
+                        map.put("timestamp", entry.getTimestamp());
+                        map.put("senderId", entry.getSenderId());
+                        map.put("receiverId", entry.getReceiverId());
+
+                        // Sender name fetch
+                        userRepository.findById(entry.getSenderId())
+                                .ifPresent(u -> map.put("senderName", u.getUsername()));
+
+                        // Receiver name fetch
+                        userRepository.findById(entry.getReceiverId())
+                                .ifPresent(u -> map.put("receiverName", u.getUsername()));
+
+                        return map;
+                    }).toList();
+
+                    return ResponseEntity.ok(result);
+                })
+                .orElse(ResponseEntity.notFound().build());
     }
 
     @GetMapping("/{userId}")
@@ -81,10 +108,10 @@ public class WalletController {
     @Transactional
     public ResponseEntity<String> transferMoney(@Valid @RequestBody TransferRequest request) {
 
-        Wallet fromWallet = walletRepository.findByUser_Id(request.getFromUserId())  // ← fix
+        Wallet fromWallet = walletRepository.findByUser_Id(request.getFromUserId())
                 .orElseThrow(() -> new WalletNotFoundException("Sender wallet not found"));
 
-        Wallet toWallet = walletRepository.findByUser_Id(request.getToUserId())  // ← fix
+        Wallet toWallet = walletRepository.findByUser_Id(request.getToUserId())
                 .orElseThrow(() -> new WalletNotFoundException("Receiver wallet not found"));
 
         if (fromWallet.getBalance().compareTo(request.getAmount()) < 0) {
@@ -97,10 +124,22 @@ public class WalletController {
         walletRepository.save(fromWallet);
         walletRepository.save(toWallet);
 
-        LedgerEntry debit = new LedgerEntry(fromWallet.getId(), request.getAmount(), "DEBIT");
+        LedgerEntry debit = new LedgerEntry();
+        debit.setWalletId(fromWallet.getId());
+        debit.setSenderId(request.getFromUserId());
+        debit.setReceiverId(request.getToUserId());
+        debit.setAmount(request.getAmount());
+        debit.setType("DEBIT");
+        debit.setTimestamp(LocalDateTime.now());
         ledgerEntryRepository.save(debit);
 
-        LedgerEntry credit = new LedgerEntry(toWallet.getId(), request.getAmount(), "CREDIT");
+        LedgerEntry credit = new LedgerEntry();
+        credit.setWalletId(toWallet.getId());
+        credit.setSenderId(request.getFromUserId());
+        credit.setReceiverId(request.getToUserId());
+        credit.setAmount(request.getAmount());
+        credit.setType("CREDIT");
+        credit.setTimestamp(LocalDateTime.now());
         ledgerEntryRepository.save(credit);
 
         return ResponseEntity.ok("Transfer successful!");

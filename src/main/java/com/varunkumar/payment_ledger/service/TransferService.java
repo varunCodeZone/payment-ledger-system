@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 @Service
 public class TransferService {
@@ -19,27 +20,35 @@ public class TransferService {
     @Autowired
     private LedgerEntryRepository ledgerEntryRepository;
 
+
     @Transactional
-    public void transferFunds(Long senderId, Long receiverId, Double amount) {
-        Wallet sender = walletRepository.findByIdForUpdate(senderId)
-                .orElseThrow(() -> new RuntimeException("Sender wallet not found"));
+    public void transferFunds(Long senderUserId, Long receiverUserId, Double amount) {
+        Wallet senderWallet = walletRepository.findByUser_Id(senderUserId)
+                .orElseThrow(() -> new RuntimeException("Sender not found"));
+        Wallet receiverWallet = walletRepository.findByUser_Id(receiverUserId)
+                .orElseThrow(() -> new RuntimeException("Receiver not found"));
 
-        Wallet receiver = walletRepository.findByIdForUpdate(receiverId)
-                .orElseThrow(() -> new RuntimeException("Receiver wallet not found"));
+        senderWallet.setBalance(senderWallet.getBalance().subtract(BigDecimal.valueOf(amount)));
+        receiverWallet.setBalance(receiverWallet.getBalance().add(BigDecimal.valueOf(amount)));
+        walletRepository.save(senderWallet);
+        walletRepository.save(receiverWallet);
 
-        if (sender.getBalance().compareTo(BigDecimal.valueOf(amount)) < 0) {
-            throw new RuntimeException("Insufficient balance");
-        }
-        sender.setBalance(sender.getBalance().subtract(BigDecimal.valueOf(amount)));
-        receiver.setBalance(receiver.getBalance().add(BigDecimal.valueOf(amount)));
-
-        walletRepository.save(sender);
-        walletRepository.save(receiver);
-
-        LedgerEntry debit = new LedgerEntry(senderId, BigDecimal.valueOf(amount), "DEBIT");
-        LedgerEntry credit = new LedgerEntry(receiverId, BigDecimal.valueOf(amount), "CREDIT");
-
+        LedgerEntry debit = new LedgerEntry();
+        debit.setWalletId(senderWallet.getId());
+        debit.setSenderId(senderUserId);
+        debit.setReceiverId(receiverUserId);
+        debit.setAmount(BigDecimal.valueOf(amount));
+        debit.setType("DEBIT");
+        debit.setTimestamp(LocalDateTime.now());
         ledgerEntryRepository.save(debit);
+
+        LedgerEntry credit = new LedgerEntry();
+        credit.setWalletId(receiverWallet.getId());
+        credit.setSenderId(senderUserId);
+        credit.setReceiverId(receiverUserId);
+        credit.setAmount(BigDecimal.valueOf(amount));
+        credit.setType("CREDIT");
+        credit.setTimestamp(LocalDateTime.now());
         ledgerEntryRepository.save(credit);
     }
 }
